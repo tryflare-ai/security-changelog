@@ -1,0 +1,185 @@
+name: 'Flare Security Changelog'
+description: 'Weekly AI-synthesized cloud security summary delivered as a GitHub Issue and committed Markdown'
+author: 'Flare AI'
+
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  token:
+    description: 'Flare webhook token (flr_...) from your connector settings'
+    required: true
+  period:
+    description: 'Analysis period: "7d" for weekly or "1d" for daily'
+    required: false
+    default: '7d'
+  api-url:
+    description: 'Flare API base URL'
+    required: false
+    default: 'https://www.tryflare.ai'
+  changelog-path:
+    description: 'Path to the changelog Markdown file in your repository'
+    required: false
+    default: 'SECURITY-CHANGELOG.md'
+  json-path:
+    description: 'Path to the structured JSON changelog file'
+    required: false
+    default: 'security-changelog.json'
+  create-issue:
+    description: 'Create a GitHub Issue with the changelog summary'
+    required: false
+    default: 'true'
+
+outputs:
+  risk-score:
+    description: 'Risk score from 0-10 assigned by the analysis'
+    value: ${{ steps.changelog.outputs.risk-score }}
+  total-events:
+    description: 'Total audit log events analyzed'
+    value: ${{ steps.changelog.outputs.total-events }}
+  issue-url:
+    description: 'URL of the created GitHub Issue (if create-issue is true)'
+    value: ${{ steps.issue.outputs.issue-url }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Read prior changelog
+      id: prior
+      shell: bash
+      run: |
+        if [ -f "${{ inputs.json-path }}" ]; then
+          echo "has_prior=true" >> "$GITHUB_OUTPUT"
+          # Store prior JSON for the API call
+          cat "${{ inputs.json-path }}" > /tmp/prior-changelog.json
+        else
+          echo "has_prior=false" >> "$GITHUB_OUTPUT"
+          echo '{}' > /tmp/prior-changelog.json
+        fi
+
+    - name: Call Flare changelog API
+      id: changelog
+      shell: bash
+      run: |
+        # Build request body
+        if [ "${{ steps.prior.outputs.has_prior }}" = "true" ]; then
+          BODY=$(jq -n \
+            --arg period "${{ inputs.period }}" \
+            --slurpfile prior /tmp/prior-changelog.json \
+            '{period: $period, prior_changelog: $prior[0]}')
+        else
+          BODY=$(jq -n --arg period "${{ inputs.period }}" '{period: $period}')
+        fi
+
+        # Call the API
+        HTTP_CODE=$(curl -s -w "%{http_code}" -o /tmp/changelog-response.json \
+          -X POST "${{ inputs.api-url }}/api/webhooks/changelog" \
+          -H "Authorization: Bearer ${{ inputs.token }}" \
+          -H "Content-Type: application/json" \
+          -d "$BODY" \
+          --max-time 150)
+
+        if [ "$HTTP_CODE" != "200" ]; then
+          echo "::error::Flare API returned HTTP $HTTP_CODE"
+          cat /tmp/changelog-response.json
+          exit 1
+        fi
+
+        # Extract outputs
+        RISK_SCORE=$(jq -r '.json.risk_score' /tmp/changelog-response.json)
+        TOTAL_EVENTS=$(jq -r '.metadata.total_logs' /tmp/changelog-response.json)
+        SAMPLED=$(jq -r '.metadata.sampled' /tmp/changelog-response.json)
+        if [ "$SAMPLED" = "true" ]; then
+          TOTAL_EVENTS="${TOTAL_EVENTS}+"
+        fi
+        echo "risk-score=$RISK_SCORE" >> "$GITHUB_OUTPUT"
+        echo "total-events=$TOTAL_EVENTS" >> "$GITHUB_OUTPUT"
+
+    - name: Update changelog files
+      shell: bash
+      run: |
+        # Extract markdown content
+        MARKDOWN=$(jq -r '.markdown' /tmp/changelog-response.json)
+
+        # Write/prepend to SECURITY-CHANGELOG.md
+        if [ -f "${{ inputs.changelog-path }}" ]; then
+          # Prepend new entry to existing file
+          EXISTING=$(cat "${{ inputs.changelog-path }}")
+          printf '%s\n\n---\n\n%s' "$MARKDOWN" "$EXISTING" > "${{ inputs.changelog-path }}"
+        else
+          # Create new file with header
+          printf '# Security Changelog\n\nAI-generated cloud security summaries by [Flare](https://tryflare.ai).\n\n---\n\n%s\n' "$MARKDOWN" > "${{ inputs.changelog-path }}"
+        fi
+
+        # Write structured JSON (overwrite -- latest week only; history is in git)
+        jq '.json' /tmp/changelog-response.json > "${{ inputs.json-path }}"
+
+    - name: Commit changelog
+      shell: bash
+      run: |
+        git config user.name "flare-ai[bot]"
+        git config user.email "flare-ai[bot]@users.noreply.github.com"
+        git add "${{ inputs.changelog-path }}" "${{ inputs.json-path }}"
+
+        PERIOD_LABEL="${{ inputs.period }}"
+        if [ "$PERIOD_LABEL" = "7d" ]; then
+          PERIOD_LABEL="weekly"
+        else
+          PERIOD_LABEL="daily"
+        fi
+
+        RISK_SCORE=$(jq -r '.json.risk_score' /tmp/changelog-response.json)
+        git commit -m "security: ${PERIOD_LABEL} changelog (risk: ${RISK_SCORE}/10)" || echo "No changes to commit"
+        git push || echo "::warning::Could not push changes. Ensure the workflow has write permissions."
+
+    - name: Create GitHub Issue
+      id: issue
+      if: inputs.create-issue == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        RISK_SCORE=$(jq -r '.json.risk_score' /tmp/changelog-response.json)
+        TOTAL_EVENTS=$(jq -r '.metadata.total_logs' /tmp/changelog-response.json)
+        PERIOD_START=$(jq -r '.json.period.start' /tmp/changelog-response.json | cut -dT -f1)
+        PERIOD_END=$(jq -r '.json.period.end' /tmp/changelog-response.json | cut -dT -f1)
+        MARKDOWN=$(jq -r '.markdown' /tmp/changelog-response.json)
+
+        # Determine risk label
+        if [ "$(echo "$RISK_SCORE >= 7" | bc)" = "1" ]; then
+          RISK_LABEL="HIGH RISK"
+        elif [ "$(echo "$RISK_SCORE >= 4" | bc)" = "1" ]; then
+          RISK_LABEL="ELEVATED"
+        else
+          RISK_LABEL="LOW RISK"
+        fi
+
+        TITLE="Security Changelog: ${PERIOD_START} to ${PERIOD_END} [${RISK_LABEL}]"
+
+        BODY=$(cat <<ISSUE_EOF
+${MARKDOWN}
+
+---
+
+**Risk Score:** ${RISK_SCORE}/10 | **Events Analyzed:** ${TOTAL_EVENTS} | **Generated by [Flare](https://tryflare.ai)**
+ISSUE_EOF
+        )
+
+        ISSUE_URL=$(gh issue create \
+          --title "$TITLE" \
+          --body "$BODY" \
+          --label "security-changelog" 2>/dev/null || \
+          gh issue create --title "$TITLE" --body "$BODY" 2>/dev/null)
+
+        if [ -n "$ISSUE_URL" ]; then
+          echo "issue-url=$ISSUE_URL" >> "$GITHUB_OUTPUT"
+          echo "Created issue: $ISSUE_URL"
+        else
+          echo "::warning::Could not create GitHub Issue. Ensure the workflow has issues:write permission."
+        fi
+
+    - name: Cleanup
+      if: always()
+      shell: bash
+      run: rm -f /tmp/changelog-response.json /tmp/prior-changelog.json
