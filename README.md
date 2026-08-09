@@ -43,7 +43,7 @@ jobs:
 
 ## Setup
 
-1. Sign up at [tryflare.ai](https://www.tryflare.ai/sign-up)
+1. Sign up at [tryflare.ai](https://tryflare.ai/sign-up)
 2. Connect your GCP project (OAuth, 60 seconds)
 3. Set up a scheduled analysis (required for the changelog to know which project to analyze)
 4. Go to **Connectors**, click **Generate webhook token**
@@ -145,14 +145,15 @@ Each run commits two files:
 
 ## Requirements
 
-- A Flare account with a connected GCP connector and active scheduled analysis ([sign up](https://www.tryflare.ai/sign-up))
+- A Flare account with a connected GCP connector and active scheduled analysis ([sign up](https://tryflare.ai/sign-up))
 - `jq` and `curl` available in the runner (included in all GitHub-hosted runners)
 - Workflow permissions: `contents: write` (to commit files) and `issues: write` (to create Issues)
 
 ## Documentation
 
+- [GCP Audit Log anomaly detection](https://tryflare.ai/gcp-audit-log-anomaly-detection)
 - [Flare documentation](https://docs.tryflare.ai)
-- [tryflare.ai](https://www.tryflare.ai)
+- [tryflare.ai](https://tryflare.ai)
 
 ## License
 
