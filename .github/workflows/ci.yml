@@ -75,7 +75,7 @@ jobs:
         with:
           token: flr_test_token_123
           api-url: http://127.0.0.1:18080
-          changelog-path: 'weird $(touch /tmp/flare-pwned) changelog.md'
+          changelog-path: 'weird $(touch flare-pwned) changelog.md'
           json-path: 'sec`id`.json'
       - name: Check changelog outputs
         env:
@@ -85,7 +85,8 @@ jobs:
           test "$RISK" = 7.5
           test "$ISSUE" = https://github.com/o/r/issues/1
           # shellcheck disable=SC2016 # literal hostile path
-          test -f 'weird $(touch /tmp/flare-pwned) changelog.md'
+          test -f 'weird $(touch flare-pwned) changelog.md'
+          test ! -e flare-pwned
       - name: Assert no injected command ran
         if: always()
         run: test ! -e /tmp/flare-pwned

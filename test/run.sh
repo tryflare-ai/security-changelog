@@ -7,6 +7,7 @@
 REPO_DIR="$WORK/repo"
 mkdir -p "$REPO_DIR" && cd "$REPO_DIR" || exit 1
 git init -q && git config user.email t@example.com && git config user.name test
+git checkout -q -b main
 git commit -q --allow-empty -m init
 git init -q --bare "$WORK/remote.git"
 git remote add origin "$WORK/remote.git"
