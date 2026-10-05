@@ -17,7 +17,7 @@ inputs:
   api-url:
     description: 'Flare API base URL'
     required: false
-    default: 'https://www.tryflare.ai'
+    default: 'https://tryflare.ai'
   changelog-path:
     description: 'Path to the changelog Markdown file in your repository'
     required: false
