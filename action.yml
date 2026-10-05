@@ -44,52 +44,73 @@ outputs:
 
 runs:
   using: 'composite'
+  # Expressions are passed only through each step's environment and referenced
+  # as quoted shell variables; never interpolate ${{ }} into a script body.
   steps:
     - name: Read prior changelog
       id: prior
       shell: bash
+      env:
+        JSON_PATH: ${{ inputs.json-path }}
       run: |
-        if [ -f "${{ inputs.json-path }}" ]; then
+        set -euo pipefail
+        PRIOR_FILE="$RUNNER_TEMP/flare-prior-changelog.json"
+        if [ -f "$JSON_PATH" ]; then
           echo "has_prior=true" >> "$GITHUB_OUTPUT"
-          # Store prior JSON for the API call
-          cat "${{ inputs.json-path }}" > /tmp/prior-changelog.json
+          cat "$JSON_PATH" > "$PRIOR_FILE"
         else
           echo "has_prior=false" >> "$GITHUB_OUTPUT"
-          echo '{}' > /tmp/prior-changelog.json
+          echo '{}' > "$PRIOR_FILE"
         fi
 
     - name: Call Flare changelog API
       id: changelog
       shell: bash
+      env:
+        FLARE_TOKEN: ${{ inputs.token }}
+        FLARE_API_URL: ${{ inputs.api-url }}
+        PERIOD: ${{ inputs.period }}
+        HAS_PRIOR: ${{ steps.prior.outputs.has_prior }}
       run: |
+        set -euo pipefail
+        PRIOR_FILE="$RUNNER_TEMP/flare-prior-changelog.json"
+        RESPONSE_FILE="$RUNNER_TEMP/flare-changelog-response.json"
+        BODY_FILE="$RUNNER_TEMP/flare-changelog-request.json"
+
+        if [ -z "$FLARE_TOKEN" ]; then
+          echo "::error::Flare: no webhook token provided. Set the token input (for example from secrets.FLARE_WEBHOOK_TOKEN)."
+          exit 1
+        fi
+        echo "::add-mask::$FLARE_TOKEN"
+
         # Build request body
-        if [ "${{ steps.prior.outputs.has_prior }}" = "true" ]; then
-          BODY=$(jq -n \
-            --arg period "${{ inputs.period }}" \
-            --slurpfile prior /tmp/prior-changelog.json \
-            '{period: $period, prior_changelog: $prior[0]}')
+        if [ "$HAS_PRIOR" = "true" ]; then
+          jq -n \
+            --arg period "$PERIOD" \
+            --slurpfile prior "$PRIOR_FILE" \
+            '{period: $period, prior_changelog: $prior[0]}' > "$BODY_FILE"
         else
-          BODY=$(jq -n --arg period "${{ inputs.period }}" '{period: $period}')
+          jq -n --arg period "$PERIOD" '{period: $period}' > "$BODY_FILE"
         fi
 
         # Call the API
-        HTTP_CODE=$(curl -s -w "%{http_code}" -o /tmp/changelog-response.json \
-          -X POST "${{ inputs.api-url }}/api/webhooks/changelog" \
-          -H "Authorization: Bearer ${{ inputs.token }}" \
+        HTTP_CODE=$(curl -sS -w '%{http_code}' -o "$RESPONSE_FILE" \
+          -X POST "${FLARE_API_URL%/}/api/webhooks/changelog" \
+          -H "Authorization: Bearer $FLARE_TOKEN" \
           -H "Content-Type: application/json" \
-          -d "$BODY" \
-          --max-time 150)
+          --data-binary @"$BODY_FILE" \
+          --max-time 150) || HTTP_CODE="000"
 
         if [ "$HTTP_CODE" != "200" ]; then
           echo "::error::Flare API returned HTTP $HTTP_CODE"
-          cat /tmp/changelog-response.json
+          cat "$RESPONSE_FILE" 2>/dev/null || true
           exit 1
         fi
 
         # Extract outputs
-        RISK_SCORE=$(jq -r '.json.risk_score' /tmp/changelog-response.json)
-        TOTAL_EVENTS=$(jq -r '.metadata.total_logs' /tmp/changelog-response.json)
-        SAMPLED=$(jq -r '.metadata.sampled' /tmp/changelog-response.json)
+        RISK_SCORE=$(jq -r '.json.risk_score' "$RESPONSE_FILE")
+        TOTAL_EVENTS=$(jq -r '.metadata.total_logs' "$RESPONSE_FILE")
+        SAMPLED=$(jq -r '.metadata.sampled' "$RESPONSE_FILE")
         if [ "$SAMPLED" = "true" ]; then
           TOTAL_EVENTS="${TOTAL_EVENTS}+"
         fi
@@ -98,38 +119,45 @@ runs:
 
     - name: Update changelog files
       shell: bash
+      env:
+        CHANGELOG_PATH: ${{ inputs.changelog-path }}
+        JSON_PATH: ${{ inputs.json-path }}
       run: |
-        # Extract markdown content
-        MARKDOWN=$(jq -r '.markdown' /tmp/changelog-response.json)
+        set -euo pipefail
+        RESPONSE_FILE="$RUNNER_TEMP/flare-changelog-response.json"
+        MARKDOWN=$(jq -r '.markdown' "$RESPONSE_FILE")
 
-        # Write/prepend to SECURITY-CHANGELOG.md
-        if [ -f "${{ inputs.changelog-path }}" ]; then
-          # Prepend new entry to existing file
-          EXISTING=$(cat "${{ inputs.changelog-path }}")
-          printf '%s\n\n---\n\n%s' "$MARKDOWN" "$EXISTING" > "${{ inputs.changelog-path }}"
+        # Write/prepend to the changelog file
+        if [ -f "$CHANGELOG_PATH" ]; then
+          EXISTING=$(cat "$CHANGELOG_PATH")
+          printf '%s\n\n---\n\n%s' "$MARKDOWN" "$EXISTING" > "$CHANGELOG_PATH"
         else
-          # Create new file with header
-          printf '# Security Changelog\n\nAI-generated cloud security summaries by [Flare](https://tryflare.ai).\n\n---\n\n%s\n' "$MARKDOWN" > "${{ inputs.changelog-path }}"
+          printf '# Security Changelog\n\nAI-generated cloud security summaries by [Flare](https://tryflare.ai).\n\n---\n\n%s\n' "$MARKDOWN" > "$CHANGELOG_PATH"
         fi
 
         # Write structured JSON (overwrite -- latest week only; history is in git)
-        jq '.json' /tmp/changelog-response.json > "${{ inputs.json-path }}"
+        jq '.json' "$RESPONSE_FILE" > "$JSON_PATH"
 
     - name: Commit changelog
       shell: bash
+      env:
+        CHANGELOG_PATH: ${{ inputs.changelog-path }}
+        JSON_PATH: ${{ inputs.json-path }}
+        PERIOD: ${{ inputs.period }}
       run: |
+        set -uo pipefail
+        RESPONSE_FILE="$RUNNER_TEMP/flare-changelog-response.json"
         git config user.name "flare-ai[bot]"
         git config user.email "flare-ai[bot]@users.noreply.github.com"
-        git add "${{ inputs.changelog-path }}" "${{ inputs.json-path }}"
+        git add -- "$CHANGELOG_PATH" "$JSON_PATH"
 
-        PERIOD_LABEL="${{ inputs.period }}"
-        if [ "$PERIOD_LABEL" = "7d" ]; then
+        if [ "$PERIOD" = "7d" ]; then
           PERIOD_LABEL="weekly"
         else
           PERIOD_LABEL="daily"
         fi
 
-        RISK_SCORE=$(jq -r '.json.risk_score' /tmp/changelog-response.json)
+        RISK_SCORE=$(jq -r '.json.risk_score' "$RESPONSE_FILE")
         git commit -m "security: ${PERIOD_LABEL} changelog (risk: ${RISK_SCORE}/10)" || echo "No changes to commit"
         git push || echo "::warning::Could not push changes. Ensure the workflow has write permissions."
 
@@ -139,31 +167,28 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
       run: |
-        RISK_SCORE=$(jq -r '.json.risk_score' /tmp/changelog-response.json)
-        TOTAL_EVENTS=$(jq -r '.metadata.total_logs' /tmp/changelog-response.json)
-        PERIOD_START=$(jq -r '.json.period.start' /tmp/changelog-response.json | cut -dT -f1)
-        PERIOD_END=$(jq -r '.json.period.end' /tmp/changelog-response.json | cut -dT -f1)
-        MARKDOWN=$(jq -r '.markdown' /tmp/changelog-response.json)
+        set -uo pipefail
+        RESPONSE_FILE="$RUNNER_TEMP/flare-changelog-response.json"
+        RISK_SCORE=$(jq -r '.json.risk_score' "$RESPONSE_FILE")
+        TOTAL_EVENTS=$(jq -r '.metadata.total_logs' "$RESPONSE_FILE")
+        PERIOD_START=$(jq -r '.json.period.start' "$RESPONSE_FILE" | cut -dT -f1)
+        PERIOD_END=$(jq -r '.json.period.end' "$RESPONSE_FILE" | cut -dT -f1)
+        MARKDOWN=$(jq -r '.markdown' "$RESPONSE_FILE")
 
-        # Determine risk label
-        if [ "$(echo "$RISK_SCORE >= 7" | bc)" = "1" ]; then
-          RISK_LABEL="HIGH RISK"
-        elif [ "$(echo "$RISK_SCORE >= 4" | bc)" = "1" ]; then
-          RISK_LABEL="ELEVATED"
-        else
-          RISK_LABEL="LOW RISK"
-        fi
+        # Determine risk label (awk: portable, tolerates non-numeric scores)
+        RISK_LABEL=$(awk -v s="$RISK_SCORE" 'BEGIN { if (s + 0 >= 7) print "HIGH RISK"; else if (s + 0 >= 4) print "ELEVATED"; else print "LOW RISK" }')
 
         TITLE="Security Changelog: ${PERIOD_START} to ${PERIOD_END} [${RISK_LABEL}]"
 
         BODY=$(printf '%s\n\n---\n\n**Risk Score:** %s/10 | **Events Analyzed:** %s | **Generated by [Flare](https://tryflare.ai)' "$MARKDOWN" "$RISK_SCORE" "$TOTAL_EVENTS")
 
-        ISSUE_URL=$(gh issue create \
+        ISSUE_URL=$(gh issue create --repo "$REPO" \
           --title "$TITLE" \
           --body "$BODY" \
           --label "security-changelog" 2>/dev/null || \
-          gh issue create --title "$TITLE" --body "$BODY" 2>/dev/null)
+          gh issue create --repo "$REPO" --title "$TITLE" --body "$BODY" 2>/dev/null) || ISSUE_URL=""
 
         if [ -n "$ISSUE_URL" ]; then
           echo "issue-url=$ISSUE_URL" >> "$GITHUB_OUTPUT"
@@ -175,4 +200,4 @@ runs:
     - name: Cleanup
       if: always()
       shell: bash
-      run: rm -f /tmp/changelog-response.json /tmp/prior-changelog.json
+      run: rm -f "$RUNNER_TEMP/flare-changelog-response.json" "$RUNNER_TEMP/flare-prior-changelog.json" "$RUNNER_TEMP/flare-changelog-request.json"
