@@ -1,8 +1,10 @@
 # Flare Security Changelog
 
-**A weekly AI-synthesized cloud security summary, delivered as a GitHub Issue and committed to your repo.**
+Bring daily or weekly Google Cloud audit summaries into GitHub. This Action creates Markdown and JSON reports and can open an Issue with the summary and risk assessment.
 
-Flare analyzes your cloud audit logs and produces a concise security changelog -- a "weather report" that tells you what happened this week, what changed from last week, and what deserves attention. The output is committed as Markdown and structured JSON, creating a Git-versioned history of your cloud security posture.
+**Start here:** [Setup and all four Actions](https://tryflare.ai/github-actions) · [PR review demo](https://github.com/tryflare-ai/actions-demo)
+
+Requires a GCP connector, an active scheduled analysis, and a connector webhook token. The Action writes report files to your repository; choose a repository with the right audience for your audit information.
 
 ## How it works
 
@@ -39,12 +41,13 @@ jobs:
         uses: tryflare-ai/security-changelog@v1
         with:
           token: ${{ secrets.FLARE_WEBHOOK_TOKEN }}
+          api-url: https://tryflare.ai
 ```
 
 ## Setup
 
 1. Sign up at [tryflare.ai](https://tryflare.ai/sign-up)
-2. Connect your GCP project (OAuth, 60 seconds)
+2. Connect your GCP project using OAuth
 3. Set up a scheduled analysis (required for the changelog to know which project to analyze)
 4. Go to **Connectors**, click **Generate webhook token**
 5. Add the token as a repository secret: **Settings > Secrets > Actions > New repository secret** named `FLARE_WEBHOOK_TOKEN`
@@ -59,7 +62,7 @@ jobs:
 | `changelog-path` | No | `SECURITY-CHANGELOG.md` | Path to the changelog Markdown file. |
 | `json-path` | No | `security-changelog.json` | Path to the structured JSON changelog file. |
 | `create-issue` | No | `true` | Create a GitHub Issue with the changelog summary. |
-| `api-url` | No | `https://www.tryflare.ai` | Flare API base URL. Override for self-hosted. |
+| `api-url` | No | `https://tryflare.ai` | Flare API base URL. Override for self-hosted. |
 
 ## Outputs
 
@@ -107,6 +110,7 @@ On the first run, all trends are set to "new" (no baseline for comparison).
   uses: tryflare-ai/security-changelog@v1
   with:
     token: ${{ secrets.FLARE_WEBHOOK_TOKEN }}
+    api-url: https://tryflare.ai
     period: '1d'
     changelog-path: 'SECURITY-DAILY.md'
     json-path: 'security-daily.json'
@@ -119,6 +123,7 @@ On the first run, all trends are set to "new" (no baseline for comparison).
   uses: tryflare-ai/security-changelog@v1
   with:
     token: ${{ secrets.FLARE_WEBHOOK_TOKEN }}
+    api-url: https://tryflare.ai
     create-issue: 'false'
 ```
 
@@ -130,6 +135,7 @@ On the first run, all trends are set to "new" (no baseline for comparison).
   uses: tryflare-ai/security-changelog@v1
   with:
     token: ${{ secrets.FLARE_WEBHOOK_TOKEN }}
+    api-url: https://tryflare.ai
 
 - name: Alert on high risk
   if: steps.changelog.outputs.risk-score >= 7
@@ -158,3 +164,15 @@ Each run commits two files:
 ## License
 
 MIT
+
+## Data handling and limits
+
+Flare reads GCP audit logs through your connector and sends selected audit information to its AI provider. This Action commits generated reports and can create an Issue, making their content visible to everyone with repository access. Disable issue creation when it is not appropriate.
+
+Up to three changelog requests per day per connector. A quota response fails the Action. An active scheduled analysis is required to identify the GCP project.
+
+The Action code is MIT-licensed; hosted analysis requires a Flare account and is subject to [current service terms](https://tryflare.ai/#pricing). AI findings are review assistance, not proof of compromise or a guarantee that an environment is secure. [Privacy policy](https://tryflare.ai/privacy).
+
+## More Flare Actions
+
+[PR security check](https://github.com/tryflare-ai/pr-security-check) · [Deploy review](https://github.com/tryflare-ai/deploy-webhook) · [Incident scope](https://github.com/tryflare-ai/incident-scope) · [Security changelog](https://github.com/tryflare-ai/security-changelog)
