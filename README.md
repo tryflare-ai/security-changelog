@@ -158,6 +158,8 @@ Each run commits two files:
 ## Documentation
 
 - [GCP Audit Log anomaly detection](https://tryflare.ai/gcp-audit-log-anomaly-detection)
+- [GitHub audit log analysis and coverage](https://tryflare.ai/github-audit-logs) (separate from this Action)
+- [GitHub organization audit-log investigation guide](https://tryflare.ai/guides/github-organization-audit-log-investigation)
 - [Flare documentation](https://docs.tryflare.ai)
 - [tryflare.ai](https://tryflare.ai)
 
